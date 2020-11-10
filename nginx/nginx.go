@@ -2,6 +2,7 @@ package nginx
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -105,6 +106,11 @@ func (n *Nginx) BinaryFile() string {
 
 func (n *Nginx) ConfigFile() string {
 	return n.configfile
+}
+
+func (n *Nginx) String() string {
+	return fmt.Sprintf("Pid: %d, Binary: %s, Prefix: %s, Config: %s",
+		n.master.Pid, n.binfile, n.prefix, n.configfile)
 }
 
 func (n *Nginx) Reload(timeout time.Duration) (err error) {
