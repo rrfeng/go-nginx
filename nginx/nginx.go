@@ -127,7 +127,7 @@ func (n *Nginx) Reload(timeout time.Duration) (err error) {
 	return
 }
 
-func (n *Nginx) Upgrade(newbinfile string, healthCheckFunc func() error, timeout time.Duration) (ngx *Nginx, err error) {
+func (n *Nginx) Upgrade(newbinfile string, healthCheckFunc func() error, timeout time.Duration) (ngx *Nginx, upgradeErr, rollbackErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -135,75 +135,79 @@ func (n *Nginx) Upgrade(newbinfile string, healthCheckFunc func() error, timeout
 
 	// 根据最后执行的 phase 进行回滚，若遇到回滚错误则不再执行后续回滚步骤，直接返回错误
 	defer func() {
-		if err == nil {
+		if upgradeErr == nil {
 			return
 		}
 
 		if phase > upgradePhaseStopOldWorker {
-			rberr := n.startWorkers(ctx)
-			err = errors.WithMessage(err, "rollback(try start old worker) fail: "+rberr.Error())
-			return
+			if rollbackErr = n.startWorkers(ctx); rollbackErr != nil {
+				rollbackErr = errors.WithMessage(rollbackErr, "rollback(try start old worker) fail")
+				return
+			}
 		}
 
 		if phase > upgradePhaseStartNewMaster {
-			rberr := ngx.quit(ctx)
-			err = errors.WithMessage(err, "rollback(try stop new master) fail: "+rberr.Error())
-			return
+			if rollbackErr = ngx.quit(ctx); rollbackErr != nil {
+				rollbackErr = errors.WithMessage(rollbackErr, "rollback(try stop new master) fail")
+				return
+			}
 		}
 
 		if phase > upgradePhaseCopyNewBin {
-			rberr := os.Rename(n.binfile, newbinfile)
-			err = errors.WithMessage(err, "rollback(try remove new bin) fail: "+rberr.Error())
-			return
+			if rollbackErr = os.Rename(n.binfile, newbinfile); rollbackErr != nil {
+				rollbackErr = errors.WithMessage(rollbackErr, "rollback(try remove new bin) fail")
+				return
+			}
 		}
 
 		if phase > upgradePhaseBackupOldBin {
-			rberr := os.Rename(n.binfile+".old", n.binfile)
-			err = errors.WithMessage(err, "rollback(try restore old bin) fail: "+rberr.Error())
-			return
+			if rollbackErr = os.Rename(n.binfile+".old", n.binfile); rollbackErr != nil {
+				rollbackErr = errors.WithMessage(rollbackErr, "rollback(try restore old bin) fail")
+				return
+			}
 		}
 
 	}()
 
 	phase = upgradePhaseBackupOldBin
-	err = os.Rename(n.binfile, n.binfile+".old")
-	if err != nil {
-		err = errors.WithMessage(err, "phase backup old bin")
+	upgradeErr = os.Rename(n.binfile, n.binfile+".old")
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase backup old bin failed")
 		return
 	}
 
 	phase = upgradePhaseCopyNewBin
-	err = os.Rename(newbinfile, n.binfile)
-	if err != nil {
-		err = errors.WithMessage(err, "phase copy new bin")
+	upgradeErr = os.Rename(newbinfile, n.binfile)
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase copy new bin failed")
 		return
 	}
 
 	phase = upgradePhaseStartNewMaster
-	ngx, err = n.forkNewMaster(ctx)
-	if err != nil {
-		err = errors.WithMessage(err, "phase start new master")
+	ngx, upgradeErr = n.forkNewMaster(ctx)
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase start new master failed")
 		return
 	}
 
 	phase = upgradePhaseStopOldWorker
-	err = n.closeWorkers(ctx)
-	if err != nil {
-		err = errors.WithMessage(err, "phase stop old worker")
+	upgradeErr = n.closeWorkers(ctx)
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase stop old worker failed")
 		return
 	}
 
 	phase = upgradePhaseHealthCheck
-	err = healthCheckFunc()
-	if err != nil {
-		err = errors.WithMessage(err, "phase healthcheck")
+	upgradeErr = healthCheckFunc()
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase healthcheck failed")
 		return
 	}
 
 	phase = upgradePhaseStopOldMaster
-	err = n.quit(ctx)
-	if err != nil {
-		err = errors.WithMessage(err, "phase stop old master")
+	upgradeErr = n.quit(ctx)
+	if upgradeErr != nil {
+		upgradeErr = errors.WithMessage(upgradeErr, "phase stop old master failed")
 	}
 	return
 }
@@ -327,8 +331,8 @@ func waitWorkersGoingShutting(workers []*process.Process, ctx context.Context) (
 				}
 
 				cmdline, _ := w.Cmdline()
+				// 如果进程已经被关闭，那么 cmdline 就是空的
 				if cmdline == "" || strings.Contains(cmdline, "shutting down") {
-					// 如果进程已经被关闭，那么 cmdline 就是空的
 					checked[w.Pid] = true
 					continue
 				}
