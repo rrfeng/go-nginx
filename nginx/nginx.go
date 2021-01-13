@@ -17,7 +17,7 @@ import (
 type Nginx struct {
 	master     *process.Process
 	binfile    string
-	prefix     string
+	workdir    string
 	configfile string
 }
 
@@ -44,7 +44,7 @@ func NewNginxByPid(pid int32) (ngx *Nginx, err error) {
 	}
 
 	// nginx: master process /path/to/nginx -p ... -c ...
-	var binfile, configfile, prefix string
+	var binfile, configfile, workdir string
 	cmdLength := len(args)
 	if cmdLength >= 4 &&
 		args[0] == "nginx:" &&
@@ -58,7 +58,7 @@ func NewNginxByPid(pid int32) (ngx *Nginx, err error) {
 
 	for i := 4; i < cmdLength; i++ {
 		if args[i] == "-p" {
-			prefix = args[i+1]
+			workdir = args[i+1]
 			i++
 		}
 
@@ -71,7 +71,7 @@ func NewNginxByPid(pid int32) (ngx *Nginx, err error) {
 	ngx = &Nginx{
 		master:     p,
 		binfile:    binfile,
-		prefix:     prefix,
+		workdir:    workdir,
 		configfile: configfile,
 	}
 
@@ -96,8 +96,8 @@ func (n *Nginx) Pid() int32 {
 	return n.master.Pid
 }
 
-func (n *Nginx) Prefix() string {
-	return n.prefix
+func (n *Nginx) Workdir() string {
+	return n.workdir
 }
 
 func (n *Nginx) BinaryFile() string {
@@ -110,7 +110,7 @@ func (n *Nginx) ConfigFile() string {
 
 func (n *Nginx) String() string {
 	return fmt.Sprintf("Pid: %d, Binary: %s, Prefix: %s, Config: %s",
-		n.master.Pid, n.binfile, n.prefix, n.configfile)
+		n.master.Pid, n.binfile, n.workdir, n.configfile)
 }
 
 func (n *Nginx) Reload(timeout time.Duration) (err error) {
@@ -129,7 +129,7 @@ func (n *Nginx) Reload(timeout time.Duration) (err error) {
 		return
 	}
 
-	err = waitWorkersGoingShutting(workers, ctx)
+	err = waitWorkersGoingShutting(ctx, workers)
 	return
 }
 
@@ -280,7 +280,7 @@ func (n *Nginx) startWorkers(ctx context.Context) (err error) {
 		err = errors.WithMessagef(err, "canot send SIGHUP to master pid %d", n.master.Pid)
 		return
 	}
-	return waitNewWorkersStarted(n.master, ctx)
+	return waitNewWorkersStarted(ctx, n.master)
 }
 
 func (n *Nginx) closeWorkers(ctx context.Context) (err error) {
@@ -295,11 +295,11 @@ func (n *Nginx) closeWorkers(ctx context.Context) (err error) {
 		return errors.WithMessagef(err, "cannot send SIGWINCH to pid %d", n.master.Pid)
 	}
 
-	err = waitWorkersGoingShutting(workers, ctx)
+	err = waitWorkersGoingShutting(ctx, workers)
 	return
 }
 
-func waitNewWorkersStarted(parent *process.Process, ctx context.Context) (err error) {
+func waitNewWorkersStarted(ctx context.Context, parent *process.Process) (err error) {
 	var children []*process.Process
 	for {
 		select {
@@ -321,7 +321,7 @@ func waitNewWorkersStarted(parent *process.Process, ctx context.Context) (err er
 	}
 }
 
-func waitWorkersGoingShutting(workers []*process.Process, ctx context.Context) (err error) {
+func waitWorkersGoingShutting(ctx context.Context, workers []*process.Process) (err error) {
 
 	checked := map[int32]bool{}
 	for {
