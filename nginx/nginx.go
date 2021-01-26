@@ -49,7 +49,7 @@ func NewNginxByPid(pid int32) (ngx *Nginx, err error) {
 	if cmdLength >= 4 &&
 		args[0] == "nginx:" &&
 		args[1] == "master" &&
-		args[3] == "process" {
+		args[2] == "process" {
 		binfile = args[4]
 	} else {
 		err = errors.New("invalid master process cmdline: " + strings.Join(args, " "))
