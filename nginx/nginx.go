@@ -123,7 +123,7 @@ func (n *Nginx) Reload(timeout time.Duration) (err error) {
 		return
 	}
 
-	err = n.master.SendSignalWithContext(ctx, syscall.SIGUSR1)
+	err = n.master.SendSignalWithContext(ctx, syscall.HUP)
 	if err != nil {
 		err = errors.WithMessage(err, "cannot send reload signal")
 		return
